@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/heetch/sqalx"
+	"github.com/jmoiron/sqlx"
 	"github.com/lann/builder"
 )
 
@@ -63,12 +65,37 @@ func (r *dbRunner) QueryRow(query string, args ...interface{}) RowScanner {
 	return r.DB.QueryRow(query, args...)
 }
 
+// DBXRunner wraps sql.DB to implement Runner.
+type dbxRunner struct {
+	*sqlx.DB
+}
+
+func (r *dbxRunner) QueryRow(query string, args ...interface{}) RowScanner {
+	return r.DB.QueryRowx(query, args...)
+}
+
 type txRunner struct {
 	*sql.Tx
 }
 
 func (r *txRunner) QueryRow(query string, args ...interface{}) RowScanner {
 	return r.Tx.QueryRow(query, args...)
+}
+
+type txxRunner struct {
+	*sqlx.Tx
+}
+
+func (r *txxRunner) QueryRow(query string, args ...interface{}) RowScanner {
+	return r.Tx.QueryRowx(query, args...)
+}
+
+type sqalxTxRunner struct {
+	sqalx.Node
+}
+
+func (r *sqalxTxRunner) QueryRow(query string, args ...interface{}) RowScanner {
+	return r.QueryRowx(query, args...)
 }
 
 func setRunWith(b interface{}, baseRunner BaseRunner) interface{} {
@@ -80,6 +107,12 @@ func setRunWith(b interface{}, baseRunner BaseRunner) interface{} {
 		runner = &dbRunner{r}
 	case *sql.Tx:
 		runner = &txRunner{r}
+	case *sqlx.DB:
+		runner = &dbxRunner{r}
+	case *sqlx.Tx:
+		runner = &txxRunner{r}
+	case sqalx.Node:
+		runner = &sqalxTxRunner{r}
 	}
 	return builder.Set(b, "RunWith", runner)
 }
