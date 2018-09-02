@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/heetch/sqalx"
+	gsqalx "github.com/gbl08ma/sqalx"
+	hsqalx "github.com/heetch/sqalx"
 	"github.com/jmoiron/sqlx"
 	"github.com/lann/builder"
 )
@@ -90,11 +91,19 @@ func (r *txxRunner) QueryRow(query string, args ...interface{}) RowScanner {
 	return r.Tx.QueryRowx(query, args...)
 }
 
-type sqalxTxRunner struct {
-	sqalx.Node
+type hsqalxTxRunner struct {
+	hsqalx.Node
 }
 
-func (r *sqalxTxRunner) QueryRow(query string, args ...interface{}) RowScanner {
+func (r *hsqalxTxRunner) QueryRow(query string, args ...interface{}) RowScanner {
+	return r.QueryRowx(query, args...)
+}
+
+type gsqalxTxRunner struct {
+	gsqalx.Node
+}
+
+func (r *gsqalxTxRunner) QueryRow(query string, args ...interface{}) RowScanner {
 	return r.QueryRowx(query, args...)
 }
 
@@ -111,8 +120,10 @@ func setRunWith(b interface{}, baseRunner BaseRunner) interface{} {
 		runner = &dbxRunner{r}
 	case *sqlx.Tx:
 		runner = &txxRunner{r}
-	case sqalx.Node:
-		runner = &sqalxTxRunner{r}
+	case hsqalx.Node:
+		runner = &hsqalxTxRunner{r}
+	case gsqalx.Node:
+		runner = &gsqalxTxRunner{r}
 	}
 	return builder.Set(b, "RunWith", runner)
 }
