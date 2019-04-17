@@ -20,7 +20,7 @@ type selectData struct {
 	WhereParts        []Sqlizer
 	GroupBys          []string
 	HavingParts       []Sqlizer
-	OrderBys          []string
+	OrderByParts      []Sqlizer
 	Limit             string
 	Offset            string
 	Suffixes          exprs
@@ -52,6 +52,20 @@ func (d *selectData) QueryRow() RowScanner {
 }
 
 func (d *selectData) ToSql() (sqlStr string, args []interface{}, err error) {
+	sqlStr, args, err = d.toSql()
+	if err != nil {
+		return
+	}
+
+	sqlStr, err = d.PlaceholderFormat.ReplacePlaceholders(sqlStr)
+	return
+}
+
+func (d *selectData) toSqlRaw() (sqlStr string, args []interface{}, err error) {
+	return d.toSql()
+}
+
+func (d *selectData) toSql() (sqlStr string, args []interface{}, err error) {
 	if len(d.Columns) == 0 {
 		err = fmt.Errorf("select statements must have at least one result column")
 		return
@@ -115,9 +129,12 @@ func (d *selectData) ToSql() (sqlStr string, args []interface{}, err error) {
 		}
 	}
 
-	if len(d.OrderBys) > 0 {
+	if len(d.OrderByParts) > 0 {
 		sql.WriteString(" ORDER BY ")
-		sql.WriteString(strings.Join(d.OrderBys, ", "))
+		args, err = appendToSql(d.OrderByParts, sql, ", ", args)
+		if err != nil {
+			return
+		}
 	}
 
 	if len(d.Limit) > 0 {
@@ -135,7 +152,7 @@ func (d *selectData) ToSql() (sqlStr string, args []interface{}, err error) {
 		args, _ = d.Suffixes.AppendToSql(sql, " ", args)
 	}
 
-	sqlStr, err = d.PlaceholderFormat.ReplacePlaceholders(sql.String())
+	sqlStr = sql.String()
 	return
 }
 
@@ -192,6 +209,19 @@ func (b SelectBuilder) Scan(dest ...interface{}) error {
 func (b SelectBuilder) ToSql() (string, []interface{}, error) {
 	data := builder.GetStruct(b).(selectData)
 	return data.ToSql()
+}
+
+func (b SelectBuilder) MustSql() (string, []interface{}) {
+	sql, args, err := b.ToSql()
+	if err != nil {
+		panic(err)
+	}
+	return sql, args
+}
+
+func (b SelectBuilder) toSqlRaw() (string, []interface{}, error) {
+	data := builder.GetStruct(b).(selectData)
+	return data.toSqlRaw()
 }
 
 // Prefix adds an expression to the beginning of the query
@@ -277,6 +307,9 @@ func (b SelectBuilder) RightJoin(join string, rest ...interface{}) SelectBuilder
 //
 // Where will panic if pred isn't any of the above types.
 func (b SelectBuilder) Where(pred interface{}, args ...interface{}) SelectBuilder {
+	if pred == nil || pred == "" {
+		return b
+	}
 	return builder.Append(b, "WhereParts", newWherePart(pred, args...)).(SelectBuilder)
 }
 
@@ -292,9 +325,18 @@ func (b SelectBuilder) Having(pred interface{}, rest ...interface{}) SelectBuild
 	return builder.Append(b, "HavingParts", newWherePart(pred, rest...)).(SelectBuilder)
 }
 
+// OrderByClause adds ORDER BY clause to the query.
+func (b SelectBuilder) OrderByClause(pred interface{}, args ...interface{}) SelectBuilder {
+	return builder.Append(b, "OrderByParts", newPart(pred, args...)).(SelectBuilder)
+}
+
 // OrderBy adds ORDER BY expressions to the query.
 func (b SelectBuilder) OrderBy(orderBys ...string) SelectBuilder {
-	return builder.Extend(b, "OrderBys", orderBys).(SelectBuilder)
+	for _, orderBy := range orderBys {
+		b = b.OrderByClause(orderBy)
+	}
+
+	return b
 }
 
 // Limit sets a LIMIT clause on the query.
@@ -302,9 +344,19 @@ func (b SelectBuilder) Limit(limit uint64) SelectBuilder {
 	return builder.Set(b, "Limit", fmt.Sprintf("%d", limit)).(SelectBuilder)
 }
 
+// Limit ALL allows to access all records with limit
+func (b SelectBuilder) RemoveLimit() SelectBuilder {
+	return builder.Delete(b, "Limit").(SelectBuilder)
+}
+
 // Offset sets a OFFSET clause on the query.
 func (b SelectBuilder) Offset(offset uint64) SelectBuilder {
 	return builder.Set(b, "Offset", fmt.Sprintf("%d", offset)).(SelectBuilder)
+}
+
+// RemoveOffset removes OFFSET clause.
+func (b SelectBuilder) RemoveOffset() SelectBuilder {
+	return builder.Delete(b, "Offset").(SelectBuilder)
 }
 
 // Suffix adds an expression to the end of the query

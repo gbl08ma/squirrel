@@ -1,10 +1,11 @@
 // Package squirrel provides a fluent SQL generator.
 //
-// See https://github.com/lann/squirrel for examples.
+// See https://github.com/Masterminds/squirrel for examples.
 package squirrel
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -21,6 +22,12 @@ import (
 // as passed to e.g. database/sql.Exec. It can also return an error.
 type Sqlizer interface {
 	ToSql() (string, []interface{}, error)
+}
+
+// rawSqlizer is expected to do what Sqlizer does, but without finalizing placeholders.
+// This is useful for nested queries.
+type rawSqlizer interface {
+	toSqlRaw() (string, []interface{}, error)
 }
 
 // Execer is the interface that wraps the Exec method.
@@ -57,30 +64,21 @@ type Runner interface {
 	QueryRower
 }
 
-// DBRunner wraps sql.DB to implement Runner.
-type dbRunner struct {
-	*sql.DB
+type stdsql interface {
+	Query(string, ...interface{}) (*sql.Rows, error)
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+	QueryRow(string, ...interface{}) *sql.Row
+	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+	Exec(string, ...interface{}) (sql.Result, error)
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
 }
 
-func (r *dbRunner) QueryRow(query string, args ...interface{}) RowScanner {
-	return r.DB.QueryRow(query, args...)
+type stdsqlRunner struct {
+	stdsql
 }
 
-// DBXRunner wraps sql.DB to implement Runner.
-type dbxRunner struct {
-	*sqlx.DB
-}
-
-func (r *dbxRunner) QueryRow(query string, args ...interface{}) RowScanner {
-	return r.DB.QueryRowx(query, args...)
-}
-
-type txRunner struct {
-	*sql.Tx
-}
-
-func (r *txRunner) QueryRow(query string, args ...interface{}) RowScanner {
-	return r.Tx.QueryRow(query, args...)
+func (r *stdsqlRunner) QueryRow(query string, args ...interface{}) RowScanner {
+	return r.stdsql.QueryRow(query, args...)
 }
 
 type txxRunner struct {
@@ -112,18 +110,13 @@ func setRunWith(b interface{}, baseRunner BaseRunner) interface{} {
 	switch r := baseRunner.(type) {
 	case Runner:
 		runner = r
-	case *sql.DB:
-		runner = &dbRunner{r}
-	case *sql.Tx:
-		runner = &txRunner{r}
-	case *sqlx.DB:
-		runner = &dbxRunner{r}
-	case *sqlx.Tx:
-		runner = &txxRunner{r}
+	case stdsql:
+		runner = &stdsqlRunner{r}
 	case hsqalx.Node:
 		runner = &hsqalxTxRunner{r}
 	case gsqalx.Node:
 		runner = &gsqalxTxRunner{r}
+
 	}
 	return builder.Set(b, "RunWith", runner)
 }

@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
-	"github.com/lann/builder"
 	"strings"
+
+	"github.com/lann/builder"
 )
 
 type deleteData struct {
@@ -74,7 +75,6 @@ func (d *deleteData) ToSql() (sqlStr string, args []interface{}, err error) {
 	sqlStr, err = d.PlaceholderFormat.ReplacePlaceholders(sql.String())
 	return
 }
-
 
 // Builder
 
@@ -149,4 +149,16 @@ func (b DeleteBuilder) Offset(offset uint64) DeleteBuilder {
 // Suffix adds an expression to the end of the query
 func (b DeleteBuilder) Suffix(sql string, args ...interface{}) DeleteBuilder {
 	return builder.Append(b, "Suffixes", Expr(sql, args...)).(DeleteBuilder)
+}
+
+func (b DeleteBuilder) Query() (*sql.Rows, error) {
+	data := builder.GetStruct(b).(deleteData)
+	return data.Query()
+}
+
+func (d *deleteData) Query() (*sql.Rows, error) {
+	if d.RunWith == nil {
+		return nil, RunnerNotSet
+	}
+	return QueryWith(d.RunWith, d)
 }

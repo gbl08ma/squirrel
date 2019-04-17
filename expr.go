@@ -5,7 +5,14 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
 	"strings"
+)
+
+const (
+	// Portable true/false literals.
+	sqlTrue  = "(1=1)"
+	sqlFalse = "(1=0)"
 )
 
 type expr struct {
@@ -71,22 +78,32 @@ func (e aliasExpr) ToSql() (sql string, args []interface{}, err error) {
 //     .Where(Eq{"id": 1})
 type Eq map[string]interface{}
 
-func (eq Eq) toSql(useNotOpr bool) (sql string, args []interface{}, err error) {
+func (eq Eq) toSQL(useNotOpr bool) (sql string, args []interface{}, err error) {
+	if len(eq) == 0 {
+		// Empty Sql{} evaluates to true.
+		sql = sqlTrue
+		return
+	}
+
 	var (
-		exprs    []string
-		equalOpr string = "="
-		inOpr    string = "IN"
-		nullOpr  string = "IS"
+		exprs       []string
+		equalOpr    = "="
+		inOpr       = "IN"
+		nullOpr     = "IS"
+		inEmptyExpr = sqlFalse
 	)
 
 	if useNotOpr {
 		equalOpr = "<>"
 		inOpr = "NOT IN"
 		nullOpr = "IS NOT"
+		inEmptyExpr = sqlTrue
 	}
 
-	for key, val := range eq {
-		expr := ""
+	sortedKeys := getSortedKeys(eq)
+	for _, key := range sortedKeys {
+		var expr string
+		val := eq[key]
 
 		switch v := val.(type) {
 		case driver.Valuer:
@@ -95,13 +112,22 @@ func (eq Eq) toSql(useNotOpr bool) (sql string, args []interface{}, err error) {
 			}
 		}
 
+		r := reflect.ValueOf(val)
+		if r.Kind() == reflect.Ptr {
+			if r.IsNil() {
+				val = nil
+			} else {
+				val = r.Elem().Interface()
+			}
+		}
+
 		if val == nil {
 			expr = fmt.Sprintf("%s %s NULL", key, nullOpr)
 		} else {
-			valVal := reflect.ValueOf(val)
-			if valVal.Kind() == reflect.Array || valVal.Kind() == reflect.Slice {
+			if isListType(val) {
+				valVal := reflect.ValueOf(val)
 				if valVal.Len() == 0 {
-					expr = fmt.Sprintf("%s %s (NULL)", key, inOpr)
+					expr = inEmptyExpr
 					if args == nil {
 						args = []interface{}{}
 					}
@@ -123,7 +149,7 @@ func (eq Eq) toSql(useNotOpr bool) (sql string, args []interface{}, err error) {
 }
 
 func (eq Eq) ToSql() (sql string, args []interface{}, err error) {
-	return eq.toSql(false)
+	return eq.toSQL(false)
 }
 
 // NotEq is syntactic sugar for use with Where/Having/Set methods.
@@ -132,7 +158,63 @@ func (eq Eq) ToSql() (sql string, args []interface{}, err error) {
 type NotEq Eq
 
 func (neq NotEq) ToSql() (sql string, args []interface{}, err error) {
-	return Eq(neq).toSql(true)
+	return Eq(neq).toSQL(true)
+}
+
+// Like is syntactic sugar for use with LIKE conditions.
+// Ex:
+//     .Where(Like{"name": "%irrel"})
+type Like map[string]interface{}
+
+func (lk Like) toSql(opposite bool) (sql string, args []interface{}, err error) {
+	var (
+		exprs []string
+		opr   = "LIKE"
+	)
+
+	if opposite {
+		opr = "NOT LIKE"
+	}
+
+	for key, val := range lk {
+		expr := ""
+
+		switch v := val.(type) {
+		case driver.Valuer:
+			if val, err = v.Value(); err != nil {
+				return
+			}
+		}
+
+		if val == nil {
+			err = fmt.Errorf("cannot use null with like operators")
+			return
+		} else {
+			if isListType(val) {
+				err = fmt.Errorf("cannot use array or slice with like operators")
+				return
+			} else {
+				expr = fmt.Sprintf("%s %s ?", key, opr)
+				args = append(args, val)
+			}
+		}
+		exprs = append(exprs, expr)
+	}
+	sql = strings.Join(exprs, " AND ")
+	return
+}
+
+func (lk Like) ToSql() (sql string, args []interface{}, err error) {
+	return lk.toSql(false)
+}
+
+// NotLike is syntactic sugar for use with LIKE conditions.
+// Ex:
+//     .Where(NotLike{"name": "%irrel"})
+type NotLike Like
+
+func (nlk NotLike) ToSql() (sql string, args []interface{}, err error) {
+	return Like(nlk).toSql(true)
 }
 
 // Lt is syntactic sugar for use with Where/Having/Set methods.
@@ -143,7 +225,7 @@ type Lt map[string]interface{}
 func (lt Lt) toSql(opposite, orEq bool) (sql string, args []interface{}, err error) {
 	var (
 		exprs []string
-		opr   string = "<"
+		opr   = "<"
 	)
 
 	if opposite {
@@ -154,8 +236,10 @@ func (lt Lt) toSql(opposite, orEq bool) (sql string, args []interface{}, err err
 		opr = fmt.Sprintf("%s%s", opr, "=")
 	}
 
-	for key, val := range lt {
-		expr := ""
+	sortedKeys := getSortedKeys(lt)
+	for _, key := range sortedKeys {
+		var expr string
+		val := lt[key]
 
 		switch v := val.(type) {
 		case driver.Valuer:
@@ -167,16 +251,14 @@ func (lt Lt) toSql(opposite, orEq bool) (sql string, args []interface{}, err err
 		if val == nil {
 			err = fmt.Errorf("cannot use null with less than or greater than operators")
 			return
-		} else {
-			valVal := reflect.ValueOf(val)
-			if valVal.Kind() == reflect.Array || valVal.Kind() == reflect.Slice {
-				err = fmt.Errorf("cannot use array or slice with less than or greater than operators")
-				return
-			} else {
-				expr = fmt.Sprintf("%s %s ?", key, opr)
-				args = append(args, val)
-			}
 		}
+		if isListType(val) {
+			err = fmt.Errorf("cannot use array or slice with less than or greater than operators")
+			return
+		}
+		expr = fmt.Sprintf("%s %s ?", key, opr)
+		args = append(args, val)
+
 		exprs = append(exprs, expr)
 	}
 	sql = strings.Join(exprs, " AND ")
@@ -216,15 +298,18 @@ func (gtOrEq GtOrEq) ToSql() (sql string, args []interface{}, err error) {
 
 type conj []Sqlizer
 
-func (c conj) join(sep string) (sql string, args []interface{}, err error) {
+func (c conj) join(sep, defaultExpr string) (sql string, args []interface{}, err error) {
+	if len(c) == 0 {
+		return defaultExpr, []interface{}{}, nil
+	}
 	var sqlParts []string
 	for _, sqlizer := range c {
-		partSql, partArgs, err := sqlizer.ToSql()
+		partSQL, partArgs, err := sqlizer.ToSql()
 		if err != nil {
 			return "", nil, err
 		}
-		if partSql != "" {
-			sqlParts = append(sqlParts, partSql)
+		if partSQL != "" {
+			sqlParts = append(sqlParts, partSQL)
 			args = append(args, partArgs...)
 		}
 	}
@@ -234,14 +319,33 @@ func (c conj) join(sep string) (sql string, args []interface{}, err error) {
 	return
 }
 
+// And conjunction Sqlizers
 type And conj
 
 func (a And) ToSql() (string, []interface{}, error) {
-	return conj(a).join(" AND ")
+	return conj(a).join(" AND ", sqlTrue)
 }
 
+// Or conjunction Sqlizers
 type Or conj
 
 func (o Or) ToSql() (string, []interface{}, error) {
-	return conj(o).join(" OR ")
+	return conj(o).join(" OR ", sqlFalse)
+}
+
+func getSortedKeys(exp map[string]interface{}) []string {
+	sortedKeys := make([]string, 0, len(exp))
+	for k := range exp {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+	return sortedKeys
+}
+
+func isListType(val interface{}) bool {
+	if driver.IsValue(val) {
+		return false
+	}
+	valVal := reflect.ValueOf(val)
+	return valVal.Kind() == reflect.Array || valVal.Kind() == reflect.Slice
 }

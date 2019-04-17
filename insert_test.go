@@ -19,11 +19,11 @@ func TestInsertBuilderToSql(t *testing.T) {
 	sql, args, err := b.ToSql()
 	assert.NoError(t, err)
 
-	expectedSql :=
+	expectedSQL :=
 		"WITH prefix AS ? " +
 			"INSERT DELAYED IGNORE INTO a (b,c) VALUES (?,?),(?,? + 1) " +
 			"RETURNING ?"
-	assert.Equal(t, expectedSql, sql)
+	assert.Equal(t, expectedSQL, sql)
 
 	expectedArgs := []interface{}{0, 1, 2, 3, 4, 5}
 	assert.Equal(t, expectedArgs, args)
@@ -51,10 +51,10 @@ func TestInsertBuilderRunners(t *testing.T) {
 	db := &DBStub{}
 	b := Insert("test").Values(1).RunWith(db)
 
-	expectedSql := "INSERT INTO test VALUES (?)"
+	expectedSQL := "INSERT INTO test VALUES (?)"
 
 	b.Exec()
-	assert.Equal(t, expectedSql, db.LastExecSql)
+	assert.Equal(t, expectedSQL, db.LastExecSql)
 }
 
 func TestInsertBuilderNoRunner(t *testing.T) {
@@ -65,13 +65,27 @@ func TestInsertBuilderNoRunner(t *testing.T) {
 }
 
 func TestInsertBuilderSetMap(t *testing.T) {
-	b := Insert("table").SetMap(Eq{"field1": 1})
+	b := Insert("table").SetMap(Eq{"field1": 1, "field2": 2, "field3": 3})
 
 	sql, args, err := b.ToSql()
 	assert.NoError(t, err)
 
-	expectedSql := "INSERT INTO table (field1) VALUES (?)"
-	assert.Equal(t, expectedSql, sql)
+	expectedSQL := "INSERT INTO table (field1,field2,field3) VALUES (?,?,?)"
+	assert.Equal(t, expectedSQL, sql)
+
+	expectedArgs := []interface{}{1, 2, 3}
+	assert.Equal(t, expectedArgs, args)
+}
+
+func TestInsertBuilderSelect(t *testing.T) {
+	sb := Select("field1").From("table1").Where(Eq{"field1": 1})
+	ib := Insert("table2").Columns("field1").Select(sb)
+
+	sql, args, err := ib.ToSql()
+	assert.NoError(t, err)
+
+	expectedSQL := "INSERT INTO table2 (field1) SELECT field1 FROM table1 WHERE field1 = ?"
+	assert.Equal(t, expectedSQL, sql)
 
 	expectedArgs := []interface{}{1}
 	assert.Equal(t, expectedArgs, args)

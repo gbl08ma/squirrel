@@ -28,6 +28,7 @@ func TestSelectBuilderToSql(t *testing.T) {
 		Where(Or{Expr("j = ?", 10), And{Eq{"k": 11}, Expr("true")}}).
 		GroupBy("l").
 		Having("m = n").
+		OrderByClause("? DESC", 1).
 		OrderBy("o ASC", "p DESC").
 		Limit(12).
 		Offset(13).
@@ -44,11 +45,11 @@ func TestSelectBuilderToSql(t *testing.T) {
 			"FROM e " +
 			"CROSS JOIN j1 JOIN j2 LEFT JOIN j3 RIGHT JOIN j4 " +
 			"WHERE f = ? AND g = ? AND h = ? AND i IN (?,?,?) AND (j = ? OR (k = ? AND true)) " +
-			"GROUP BY l HAVING m = n ORDER BY o ASC, p DESC LIMIT 12 OFFSET 13 " +
+			"GROUP BY l HAVING m = n ORDER BY ? DESC, o ASC, p DESC LIMIT 12 OFFSET 13 " +
 			"FETCH FIRST ? ROWS ONLY"
 	assert.Equal(t, expectedSql, sql)
 
-	expectedArgs := []interface{}{0, 1, 2, 3, 100, 101, 102, 103, 4, 5, 6, 7, 8, 9, 10, 11, 14}
+	expectedArgs := []interface{}{0, 1, 2, 3, 100, 101, 102, 103, 4, 5, 6, 7, 8, 9, 10, 11, 1, 14}
 	assert.Equal(t, expectedArgs, args)
 }
 
@@ -78,6 +79,9 @@ func TestSelectBuilderPlaceholders(t *testing.T) {
 
 	sql, _, _ = b.PlaceholderFormat(Dollar).ToSql()
 	assert.Equal(t, "SELECT test WHERE x = $1 AND y = $2", sql)
+
+	sql, _, _ = b.PlaceholderFormat(Colon).ToSql()
+	assert.Equal(t, "SELECT test WHERE x = :1 AND y = :2", sql)
 }
 
 func TestSelectBuilderRunners(t *testing.T) {
@@ -161,4 +165,58 @@ func TestSelectWithOptions(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "SELECT DISTINCT SQL_NO_CACHE * FROM foo", sql)
+}
+
+func TestSelectWithRemoveLimit(t *testing.T) {
+	sql, _, err := Select("*").From("foo").Limit(10).RemoveLimit().ToSql()
+
+	assert.NoError(t, err)
+	assert.Equal(t, "SELECT * FROM foo", sql)
+}
+
+func TestSelectWithRemoveOffset(t *testing.T) {
+	sql, _, err := Select("*").From("foo").Offset(10).RemoveOffset().ToSql()
+
+	assert.NoError(t, err)
+	assert.Equal(t, "SELECT * FROM foo", sql)
+}
+
+func TestSelectBuilderNestedSelectDollar(t *testing.T) {
+	nestedBuilder := StatementBuilder.PlaceholderFormat(Dollar).Select("*").Prefix("NOT EXISTS (").
+		From("bar").Where("y = ?", 42).Suffix(")")
+	outerSql, _, err := StatementBuilder.PlaceholderFormat(Dollar).Select("*").
+		From("foo").Where("x = ?").Where(nestedBuilder).ToSql()
+
+	assert.NoError(t, err)
+	assert.Equal(t, "SELECT * FROM foo WHERE x = $1 AND NOT EXISTS ( SELECT * FROM bar WHERE y = $2 )", outerSql)
+}
+
+func TestMustSql(t *testing.T) {
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("TestUserFail should have panicked!")
+			}
+		}()
+		// This function should cause a panic
+		Select().From("foo").MustSql()
+	}()
+}
+
+func TestSelectWithoutWhereClause(t *testing.T) {
+	sql, _, err := Select("*").From("users").ToSql()
+	assert.NoError(t, err)
+	assert.Equal(t, "SELECT * FROM users", sql)
+}
+
+func TestSelectWithNilWhereClause(t *testing.T) {
+	sql, _, err := Select("*").From("users").Where(nil).ToSql()
+	assert.NoError(t, err)
+	assert.Equal(t, "SELECT * FROM users", sql)
+}
+
+func TestSelectWithEmptyStringWhereClause(t *testing.T) {
+	sql, _, err := Select("*").From("users").Where("").ToSql()
+	assert.NoError(t, err)
+	assert.Equal(t, "SELECT * FROM users", sql)
 }
