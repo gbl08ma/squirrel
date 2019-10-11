@@ -1,3 +1,7 @@
+# THIS FORK IS UNMAINTAINED
+
+**The sole purpose of this fork was to introduce a small modification that allowed squirrel to be used with https://github.com/heetch/sqalx and my fork https://github.com/gbl08ma/sqalx. This has since been solved by changes in upstream squirrel that make this fork obsolete, and changes to my sqalx fork to make it work with squirrel.
+
 # Squirrel - fluent SQL generator for Go
 
 ```go
